@@ -36,6 +36,8 @@ th,td{text-align:left;padding:6px 4px;border-bottom:1px solid #232a33}
 tr.clk{cursor:pointer}tr.clk:hover{background:#1c232d}
 .err{color:var(--r);font-size:13px;margin-top:8px}
 details summary{cursor:pointer;color:var(--b)}
+.opt{border:1px solid var(--bd);border-radius:8px;padding:8px 10px;margin-bottom:8px}
+.opt summary{color:var(--tx);line-height:2}
 </style>
 </head>
 <body>
@@ -73,6 +75,15 @@ details summary{cursor:pointer;color:var(--b)}
 
 <div class="card" id="plan"><h2>Plan de trade</h2><div class="mut">—</div></div>
 
+<div class="card" id="optcard">
+  <h2>Opciones de Trading <span id="pn" class="pill">—</span></h2>
+  <div class="sub" style="margin-bottom:8px">Operaciones posibles según Triple Pantalla + SMC, siempre a favor de la marea y ordenadas por calidad.</div>
+  <div id="opts-list" class="mut">—</div>
+  <div class="note">Calidad = puntuación heurística 0–100 (marea 15–30, ola 0–30, SMC 0–40, ajuste por tipo de entrada, −10 si el apalancamiento necesario supera tu máximo). No es una probabilidad de acierto.</div>
+  <h2 style="margin-top:14px">Ranking de la lista <span class="mut" style="font-weight:400">(se rellena al pulsar «Escanear lista»)</span></h2>
+  <div style="overflow-x:auto"><table id="rank"><thead><tr><th>Activo</th><th>Opción</th><th>Dir.</th><th>Entrada</th><th>Stop</th><th>TP2</th><th>Calidad</th></tr></thead><tbody></tbody></table></div>
+</div>
+
 <div class="card">
   <h2>Escáner</h2>
   <label>Lista (separada por comas) <input id="wl" value="BTC,ETH,SOL,SUI,XRP,DOGE,BNB,LINK"></label>
@@ -87,6 +98,7 @@ details summary{cursor:pointer;color:var(--b)}
 <b>Pantalla 2 (ola):</b> se opera a favor de la marea comprando retrocesos (o vendiendo rebotes). Oscilador: Índice de Fuerza EMA 2 (&lt;0 en compras, &gt;0 en ventas) y Estocástico 5,3 (&lt;30 compras, &gt;70 ventas). Señal completa = 2/2.<br>
 <b>Pantalla 3 (entrada):</b> orden stop un tick por encima del máximo (compras) o por debajo del mínimo (ventas) de la última vela cerrada de ejecución. Si no se activa, se arrastra a la vela siguiente. Stop más allá del extremo de la ola con margen de 0,25 ATR. Objetivos 1,5R / 2,5R / 3,5R y objetivo estructural (máximo/mínimo previo de la ola).<br>
 <b>SMC (en la Ola):</b> pivotes de 3 velas; BOS = cierre que rompe el último swing a favor de la tendencia, CHoCH = rompe en contra. Order Block = última vela contraria en el origen del impulso (vigente mientras no se cierre a través). FVG = hueco de 3 velas sin rellenar. Liquidez: máximos/mínimos iguales (EQH/EQL) y barridos con cierre de vuelta. Premium/descuento respecto al 50 % del último rango. Objetivo = swing de liquidez más cercano con ≥1R.<br>
+<b>Opciones de Trading:</b> A = ruptura Triple Pantalla (orden stop); B = retroceso a un Order Block/FVG a favor de la marea (orden límite, stop tras el borde lejano); C = barrido de liquidez + ruptura de la vela del barrido. Todas van a favor de la marea, con stop con margen de 0,25 ATR y objetivos 1,5R/2,5R/3,5R más el swing de liquidez.<br>
 <b>Tamaño:</b> capital × riesgo% ÷ distancia al stop. Herramienta educativa, no es asesoramiento financiero.
 </div></details>
 </div>
@@ -153,6 +165,59 @@ function smcScan(B,aW){
   return{trend,ev:ev.slice(-6),last:ev[ev.length-1]||null,obs,fvgs,eqh,eql,ssl,bsl,pd,P};
 }
 
+// ---------- Opciones de trading ----------
+function mkPlan(c,entry,stop){
+  const dir=c.lg?1:-1;
+  if(c.lg?stop>=entry:stop<=entry)return null;
+  const risk=Math.abs(entry-stop),cfg=c.cfg;
+  const tps=[1.5,2.5,3.5].map(r=>({r,p:entry+dir*risk*r}));
+  const cand=(c.lg?c.S.P.H:c.S.P.L).map(x=>x.p).filter(p=>c.lg?p>=entry+risk:p<=entry-risk);
+  const tgt=cand.length?(c.lg?Math.min(...cand):Math.max(...cand)):null;
+  const riskUsd=cfg.capital*cfg.riskPct/100,qty=riskUsd/risk,notional=qty*entry;
+  return{entry,stop,risk,stopPct:risk/entry*100,tps,tgt,tgtR:tgt==null?null:Math.abs(tgt-entry)/risk,riskUsd,qty,notional,lev:notional/cfg.capital};
+}
+function buildOptions(c){
+  const out=[],{lg,S,lq,aW,price,tick,cfg,W,items}=c;
+  const base=(c.conf==='alta'?30:15)+c.score*15+c.smcScore*10;
+  const Q=(x,p)=>Math.max(0,Math.min(100,Math.round(base+x-(p.lev>cfg.maxLev?10:0))));
+  const giro=c.conf==='alta'?'':' Marea en giro: espera confirmación antes de armar la orden.';
+  // A · ruptura Triple Pantalla
+  if(c.score>=1){
+    const p=mkPlan(c,c.entry,c.stop);
+    if(p)out.push({id:'A',name:'Triple Pantalla · ruptura',dir:c.bias,order:lg?'Buy-stop':'Sell-stop',plan:p,quality:Q(0,p),
+      status:c.triggered?'Activada':(c.score===2&&c.conf==='alta'?'Pendiente de ruptura':'Condicional'),
+      why:['Marea '+c.tide,'Ola '+c.score+'/2','SMC '+c.smcScore+'/4'],
+      cond:'Se activa al '+(lg?'superar ':'perder ')+fmt(c.entry)+' (un tick más allá de la última vela de ejecución). Si no se activa, arrastra la orden a la vela siguiente.'+giro,
+      inval:'Cancela si la marea gira o la Ola deja de dar señal. Stop en '+fmt(c.stop)+'.'});
+  }
+  // B · retroceso a POI (OB/FVG a favor)
+  let best=null;
+  c.zs.forEach(z=>{
+    const isOB=S.obs.includes(z),inside=price>=z.lo&&price<=z.hi;
+    const edge=inside?price:(isOB?(z.lo+z.hi)/2:(lg?z.hi:z.lo));
+    const d=Math.abs(price-edge);
+    if((lg?edge<=price:edge>=price)&&d<=4*aW&&(!best||d<best.d))best={z,isOB,inside,edge,d};
+  });
+  if(best){
+    const{z,isOB,inside,edge}=best,stop=lg?z.lo-.25*aW:z.hi+.25*aW,p=mkPlan(c,edge,stop);
+    if(p)out.push({id:'B',name:'Retroceso a '+(isOB?'Order Block':'FVG'),dir:c.bias,order:inside?'Entrada en zona (mercado/límite)':'Orden límite',plan:p,
+      quality:Q(5+(inside?5:0),p),status:inside?'En zona ahora':'Límite pendiente',
+      why:[(isOB?'OB ':'FVG ')+fmt(z.lo)+' – '+fmt(z.hi)+' a favor de la marea','Zona '+items[1].txt,'Marea '+c.tide],
+      cond:inside?'El precio ya está en la zona: entrada en '+fmt(edge)+'.':'Orden límite en '+fmt(edge)+' ('+(isOB?'50 % del OB':'borde cercano del FVG')+'). Válida mientras no cierre una vela fuera de la zona.'+giro,
+      inval:'Cancela si una vela de la Ola cierra más allá de '+fmt(lg?z.lo:z.hi)+' o si la marea gira.'});
+  }
+  // C · barrido de liquidez + confirmación
+  if(lq){
+    const bar=W[lq.k],entry=lg?bar.h+tick:bar.l-tick,stop=lg?lq.wick-.25*aW:lq.wick+.25*aW,p=mkPlan(c,entry,stop);
+    if(p)out.push({id:'C',name:'Barrido de liquidez + confirmación',dir:c.bias,order:lg?'Buy-stop':'Sell-stop',plan:p,
+      quality:Q(10+(items[0].ok?5:0),p),status:(lg?price>=entry:price<=entry)?'Activada':'Pendiente de confirmación',
+      why:[(lg?'Barrido de mínimos ':'Barrido de máximos ')+fmt(lq.p)+' con cierre de vuelta','Estructura '+items[0].txt,'Marea '+c.tide],
+      cond:'Confirma al '+(lg?'superar el máximo':'perder el mínimo')+' de la vela del barrido ('+fmt(entry)+').'+giro,
+      inval:'Cancela si el precio cierra más allá de la mecha del barrido ('+fmt(lq.wick)+').'});
+  }
+  return out.sort((a,b)=>b.quality-a.quality);
+}
+
 function analyze(T,W,X,cfg,live){
   const L=a=>a[a.length-1];
   if(T.length<40||W.length<40||X.length<20)throw new Error('Pocas velas cerradas para calcular');
@@ -211,7 +276,8 @@ function analyze(T,W,X,cfg,live){
   else if(score===2){verdict='PLAN CONDICIONAL · marea en giro ('+(bias==='long'?'compra':'venta')+')';vcls='warn'}
   else if(score===1){verdict='EN PREPARACIÓN · ola parcial 1/2';vcls='warn'}
   else{verdict='ESPERAR · sin señal de ola';vcls='idle'}
-  return{smc:{...S,items,score:smcScore,poi},tide,bias,conf,emaUp,hUp,imp,e13,e26,mc,fi,st,we13,we26,score,fiOk,stOk,entry,stop,risk,tps,struct,structR,riskUsd,qty,notional,lev,tick,aW,price,triggered,verdict,vcls,
+  const opts=buildOptions({lg,bias,S,zs,lq,aW,price,tick,cfg,W,items,smcScore,score,conf,tide,entry,stop,triggered});
+  return{opts,smc:{...S,items,score:smcScore,poi},tide,bias,conf,emaUp,hUp,imp,e13,e26,mc,fi,st,we13,we26,score,fiOk,stOk,entry,stop,risk,tps,struct,structR,riskUsd,qty,notional,lev,tick,aW,price,triggered,verdict,vcls,
     stopPct:risk/entry*100,levWarn:lev>cfg.maxLev};
 }
 
@@ -313,6 +379,7 @@ function render(R,bars,sym,tfs,demo){
   $('p3').textContent=a.triggered?'activada':'pendiente';$('p3').className='pill '+(a.triggered?'up':'wr');
   chart($('c3'),X,{n:60,hlines:[{y:a.entry,color:'#58a6ff',label:'Entrada '+fmt(a.entry)},{y:a.stop,color:'#f85149',label:'Stop '+fmt(a.stop)},{y:a.tps[0].p,color:'#3fb950',label:'TP1'},{y:a.tps[2].p,color:'#3fb950',label:'TP3'}]});
   $('f3').innerHTML=kv('Temporalidad',tfs[2])+kv('Orden',(a.bias==='long'?'Buy-stop ':'Sell-stop ')+fmt(a.entry),'bl')+kv('Stop',fmt(a.stop)+' ('+a.stopPct.toFixed(2)+'%)','dn')+kv('Precio actual',fmt(a.price));
+  renderOpts(a,sym);
   // plan
   const P=$('plan');
   if(a.score===0){P.innerHTML='<h2>Plan de trade</h2><div class="mut">Sin plan: la ola no está en zona a favor de la marea. Espera retroceso (marea alcista) o rebote (bajista). Plan potencial si se activara: '+(a.bias==='long'?'compra':'venta')+' en '+fmt(a.entry)+', stop '+fmt(a.stop)+'.</div>';return}
@@ -326,6 +393,38 @@ function render(R,bars,sym,tfs,demo){
   P.innerHTML=h;
 }
 
+const RANK=[];
+const qcls=q=>q>=70?'up':q>=45?'wr':'mut',qlab=q=>q>=70?'Alta':q>=45?'Media':'Baja';
+function optHTML(o,sym,first){
+  const p=o.plan,cls=o.dir==='long'?'up':'dn',unit=sym.toUpperCase().split('-')[0],ml=+$('maxlev').value||10;
+  let h=`<details class="opt" ${first?'open':''}><summary><b>${o.id} · ${o.name}</b> <span class="pill ${cls}">${o.dir==='long'?'LARGO':'CORTO'}</span> <span class="pill ${qcls(o.quality)}">${qlab(o.quality)} · ${o.quality}</span> <span class="pill">${o.status}</span></summary><div style="margin-top:8px">`;
+  h+=kv('Tipo de orden',o.order)+kv('Entrada',fmt(p.entry),'bl')+kv('Stop',fmt(p.stop)+' ('+p.stopPct.toFixed(2)+'%)','dn');
+  p.tps.forEach((t,i)=>h+=kv('TP'+(i+1)+' ('+t.r+'R)',fmt(t.p),'up'));
+  if(p.tgt!=null)h+=kv('Objetivo de liquidez',fmt(p.tgt)+' ('+p.tgtR.toFixed(1)+'R)','up');
+  h+=kv('Riesgo',p.riskUsd.toFixed(2)+' USDT')+kv('Tamaño',p.qty.toPrecision(4)+' '+unit)+kv('Nocional',p.notional.toFixed(2)+' USDT')+kv('Apalancamiento necesario',p.lev.toFixed(2)+'×',p.lev>ml?'dn':'');
+  h+=`<div class="note"><b>Por qué:</b> ${o.why.join(' · ')}</div><div class="note"><b>Activación:</b> ${o.cond}</div><div class="note"><b>Invalidación:</b> ${o.inval}</div></div></details>`;
+  return h;
+}
+function renderOpts(a,sym){
+  $('pn').textContent=a.opts.length+(a.opts.length===1?' opción':' opciones');
+  $('pn').className='pill '+(a.opts.length?'up':'mut');
+  if(!a.opts.length){
+    const f=[];if(a.score===0)f.push('ola a favor de la marea (Fuerza EMA2 y Estocástico)');if(a.smc.score<2)f.push('más confluencia SMC (POI, barrido o zona)');
+    $('opts-list').innerHTML='<div class="mut">No hay operación válida ahora. Para '+(a.bias==='long'?'compras':'ventas')+' falta: '+(f.join(', ')||'que se forme un POI cercano o un barrido de liquidez')+'. Mejor esperar.</div>';
+    return;
+  }
+  $('opts-list').innerHTML=a.opts.map((o,i)=>optHTML(o,sym,i===0)).join('');
+}
+function renderRank(){
+  const tb=$('rank').querySelector('tbody');tb.innerHTML='';
+  RANK.sort((x,y)=>y.o.quality-x.o.quality).forEach(r=>{
+    const o=r.o,p=o.plan,tr=document.createElement('tr');tr.className='clk';
+    tr.innerHTML=`<td><b>${r.s.toUpperCase()}</b></td><td>${o.id} · ${o.name}</td><td class="${o.dir==='long'?'up':'dn'}">${o.dir==='long'?'Largo':'Corto'}</td><td>${fmt(p.entry)}</td><td>${fmt(p.stop)}</td><td>${fmt(p.tps[1].p)}</td><td><span class="pill ${qcls(o.quality)}">${o.quality}</span></td>`;
+    tr.onclick=()=>{$('sym').value=r.s;run.demo=false;run();window.scrollTo({top:0,behavior:'smooth'})};
+    tb.appendChild(tr);
+  });
+  if(!RANK.length)tb.innerHTML='<tr><td colspan=7 class="mut">Ningún activo de la lista tiene opciones válidas ahora.</td></tr>';
+}
 async function run(){
   $('err').textContent='';
   const tfs=PRESETS[$('preset').value],sym=$('sym').value,demo=run.demo;
@@ -343,19 +442,20 @@ async function run(){
 async function scan(){
   const tb=$('tbl').querySelector('tbody');tb.innerHTML='';
   const tfs=PRESETS[$('preset').value],list=$('wl').value.split(',').map(s=>s.trim()).filter(Boolean);
-  $('scan').disabled=true;
+  $('scan').disabled=true;RANK.length=0;
   for(const s of list){
     const tr=document.createElement('tr');tr.className='clk';
     try{
       const raw=await load(s,tfs,false),c=raw.map(r=>r.filter(b=>b.ok));
       const R=analyze(c[0],c[1],c[2],cfgNow(),raw[2][raw[2].length-1].c);
+      if(R.opts.length)RANK.push({s,o:R.opts[0]});
       const tc=R.tide==='alcista'?'up':R.tide==='bajista'?'dn':'wr';
       tr.innerHTML=`<td><b>${s.toUpperCase()}</b></td><td class="${tc}">${R.tide}</td><td>${R.score}/2</td><td>${R.smc.score}/4</td><td>${R.verdict}</td>`;
     }catch(e){tr.innerHTML=`<td><b>${s.toUpperCase()}</b></td><td colspan=4 class="dn">${e.message}</td>`}
     tr.onclick=()=>{$('sym').value=s;run.demo=false;run()};
     tb.appendChild(tr);
   }
-  $('scan').disabled=false;
+  $('scan').disabled=false;renderRank();
 }
 // init
 Object.keys(PRESETS).forEach(k=>{const o=document.createElement('option');o.textContent=k;$('preset').appendChild(o)});

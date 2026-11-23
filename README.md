@@ -16,6 +16,7 @@ Las llamadas a la API pública de OKX requieren ejecutarse en local (no funciona
 - **Pantalla 2 (ola):** Fuerza EMA 2 + Estocástico 5,3 contra la marea.
 - **Pantalla 3 (entrada):** orden stop sobre la última vela cerrada de ejecución, stop, TP 1,5R/2,5R/3,5R.
 - **SMC (sobre la Ola):** BOS/CHoCH, Order Blocks, FVG, EQH/EQL, barridos de liquidez, premium/descuento. Confluencia 0–4.
+- **Opciones de Trading:** operaciones A (ruptura), B (retroceso a OB/FVG) y C (barrido de liquidez), ordenadas por calidad, y ranking de la lista de activos.
 - Tamaño de posición por riesgo (2 % por defecto), escáner de lista de activos.
 
 Herramienta educativa; no es asesoramiento financiero.
