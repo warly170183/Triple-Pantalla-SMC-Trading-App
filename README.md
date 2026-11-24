@@ -20,3 +20,7 @@ Las llamadas a la API pública de OKX requieren ejecutarse en local (no funciona
 - Tamaño de posición por riesgo (2 % por defecto), escáner de lista de activos.
 
 Herramienta educativa; no es asesoramiento financiero.
+
+## Versión AI Studio (`ai-studio/`)
+Proyecto completo (Vite + React + Express) con panel de activos, alertas de Telegram con anti-spam y la sección **Evaluación** (registro local de opciones y comprobación posterior, índice de efectividad 0–100).
+Configura `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` solo como variables de entorno/Secrets; nunca en el código.

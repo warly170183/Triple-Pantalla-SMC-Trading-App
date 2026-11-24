@@ -1,0 +1,6 @@
+{
+  "name": "Triple Pantalla · Elder + SMC",
+  "description": "Aplicación web de trading que aplica la estrategia Triple Pantalla del Dr. Alexander Elder con confluencia Smart Money Concepts (SMC) y datos de OKX en vivo.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
